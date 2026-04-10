@@ -1,0 +1,86 @@
+# .github/workflows/android-build.yml
+# 文件名可以自定义，这里明确表示是 Android 构建流程
+
+name: Android APK Builder
+# 工作流名称，会在 Actions 页面显示
+
+# 触发条件配置
+on:
+  workflow_dispatch:      # 允许在 GitHub 网页端手动触发，方便随时测试
+
+# 环境变量，可以在多个 job 中复用
+env:
+  # 项目根目录下的 Gradle 包装器，确保构建一致性
+  GRADLEW: ./gradlew
+
+# 任务定义
+jobs:
+  build-android:
+    name: Build Android APK
+    # 使用最新的 Ubuntu 运行器，性价比高且对 Android 构建友好
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. 检出代码
+      - name: Checkout code
+        uses: actions/checkout@v4
+        # 对于标签触发的构建，这会自动切换到对应的标签版本
+        with:
+          fetch-depth: 0  # 获取所有历史记录，确保版本信息正确
+
+      # 2. 设置 Java 环境
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'   # 使用 Eclipse Temurin（原 AdoptOpenJDK），稳定且开源
+          java-version: '17'        # 根据项目中的 gradle.properties 或 build.gradle.kts 确定，Kotlin 项目通常需要 Java 17
+          # 注意：此项目使用了较新的 Gradle 版本（从提交记录看升级过），Java 17 是安全选择
+
+      # 3. 设置 Gradle 缓存（关键优化步骤）
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches          # 缓存 Gradle 依赖和构建缓存
+            ~/.gradle/wrapper         # 缓存 Gradle Wrapper 本身
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+        # 原因：此项目是 Kotlin Multiplatform，依赖较多。缓存可以避免每次构建都重新下载，
+        # 通常能将构建时间从 5-10 分钟缩短到 1-2 分钟
+
+      # 4. 执行 Android APK 构建
+      - name: Build Android Debug APK
+        # 从项目结构看，Android 代码位于 'android' 子目录
+        # 但 Gradle 构建根目录是项目根目录（有 settings.gradle.kts）
+        # 所以直接在根目录执行 gradlew
+        run: ${{ env.GRADLEW }} :android:assembleDebug
+        # 原因：assembleDebug 是 Android 默认的构建任务，生成未签名的调试版 APK。
+        # 使用 :android: 前缀是因为 Android 模块可能叫 'android'（从目录结构推断）
+        # 这样可以快速验证代码是否能打包成功，不涉及签名问题
+
+      # 5. 上传构建产物（APK 文件）
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          # 产物名称，包含分支/标签信息和日期，便于区分
+          name: timeto-me-debug-${{ github.ref_name }}-${{ github.run_number }}
+          # Android 模块构建输出的默认路径
+          path: android/build/outputs/apk/debug/*.apk
+          # 保留天数：调试版保留时间可以短一些
+          retention-days: 14
+        # 原因：将生成的 APK 文件保存为 GitHub Actions 的 Artifact，
+        # 可以从网页界面直接下载，方便测试或分享
+
+      # 6. （可选）如果需要发布 Release 版本，可添加此步骤
+      # 注意：发布正式版需要签名，你需要先配置 Secrets（详见前面的回答）
+      # - name: Build Release APK (需要签名配置)
+      #   if: startsWith(github.ref, 'refs/tags/v')  # 仅在打标签时执行
+      #   run: ${{ env.GRADLEW }} :android:assembleRelease
+      #   
+      # - name: Upload Release Artifact
+      #   if: startsWith(github.ref, 'refs/tags/v')
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     name: timeto-me-release-${{ github.ref_name }}
+      #     path: android/build/outputs/apk/release/*.apk
